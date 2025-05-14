@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 
 class MotionCompensation:
 
@@ -14,7 +15,7 @@ class MotionCompensation:
 
         # self.frames = [self.start_frame, self.start_frame + 1]
 
-        self.generate_prediction_frames()
+        # self.generate_prediction_frames()
 
     def generate_prediction_frames(self):
         ret0, frame0 = self.get_frame(self.start_frame)
@@ -25,31 +26,51 @@ class MotionCompensation:
 
         search_window_width = 64
         search_window_height = 64
-        block_width = 24
-        block_height = 24
+        anchor_block_width = 24
+        anchor_block_height = 24
+        candidate_block_width = anchor_block_width
+        candidate_block_height = anchor_block_height
 
         print(frame_width)
         print('start')
 
-        min_ssd = float('inf')
-        min_pos = [0, 0]
+        min_ssd = None
+        min_pos = None
 
-        block = frame0[10:10+24, 10:10+24]
-        search_window = frame1[0:0+64, 0:0+64]
-        for i in range(0, 64 - 24 + 1, 4):
-            for j in range(0, 64 - 24 + 1, 4):
-                candidate = search_window[i:i+24, j:j+24]
-                # ssd of block and current candidate
-                curr_ssd = ((candidate - block) ** 2).sum()
-                print(curr_ssd)
+        motion_vectors = np.zeros((frame_height - search_window_height + 1, frame_width - search_window_width + 1, 2))
 
-                if curr_ssd < min_ssd:
-                    min_ssd = curr_ssd
-                    min_pos = [i, j]
+        for m in range(0, frame_width - search_window_width + 1, 4):
+            for n in range(0, frame_height - search_window_height + 1, 4):
+                min_ssd = float('inf')
+                min_pos = [0, 0]
+                # search_window = frame1[m:m+search_window_width, n:n+search_window_height]
+                anchor_block = frame0[m:m+anchor_block_width, n:n+anchor_block_height] # TODO: center of search window?
+                for i in range(0, search_window_width - candidate_block_width + 1, 4):
+                    for j in range(0, search_window_height - candidate_block_height + 1, 4):
+                        candidate_block = frame1[m+i:m+i+candidate_block_width, n+j:n+j+candidate_block_height]
+                        # ssd of block and current candidate
+                        curr_ssd = ((candidate_block - anchor_block) ** 2).sum()
+                        # print(curr_ssd)
 
-                self.playback(self.start_frame, self.start_frame, rect0=((i, j), (i + 24, j + 24)), rect1=((min_pos[0], min_pos[1]), (min_pos[0] + 24, min_pos[1] + 24)))
+                        if curr_ssd < min_ssd:
+                            min_ssd = curr_ssd
+                            min_pos = [m + i, n + j]
 
-        print('best is', min_pos, 'with ssd =', min_ssd)
+                        self.playback(
+                            self.start_frame, 
+                            self.start_frame, 
+                            rect0=((m + i, n + j), (m + i + candidate_block_width, n + j + candidate_block_height)), 
+                            rect1=((min_pos[0], min_pos[1]), (min_pos[0] + candidate_block_width, min_pos[1] + candidate_block_height)),
+                            rect2=((m, n), (m + search_window_width, n + search_window_height)),
+                            arrow=((m, n), (min_pos[0], min_pos[1]))
+                        )
+                print('best is', min_pos, 'with ssd =', min_ssd)
+
+                motion_vectors[m, n] = [min_pos[0] - m, min_pos[1] - n]
+
+
+
+
 
         
         # new_frame = frame0.copy()
@@ -69,8 +90,21 @@ class MotionCompensation:
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
         return self.cap.read()
 
-    def playback(self, start_frame_index, end_frame_index, rect0: tuple[tuple[int, int], tuple[int, int]]=None, rect1: tuple[tuple[int, int], tuple[int, int]]=None):
-        print(rect0)
+    def playback(self, 
+                 start_frame_index, 
+                 end_frame_index, 
+                 autoplay=True,
+                 rect0: tuple[tuple[int, int], tuple[int, int]]=None, 
+                 rect1: tuple[tuple[int, int], tuple[int, int]]=None, 
+                 rect2: tuple[tuple[int, int], tuple[int, int]]=None,
+                 arrow: tuple[tuple[int, int], tuple[int, int]]=None
+                 ):
+        # print(rect0)
+
+        wait_key_delay = 1
+        if not autoplay:
+            wait_key_delay = 0
+
         i = start_frame_index
 
         # Set starting frame
@@ -94,15 +128,19 @@ class MotionCompensation:
             # quantized_frame = frame & 0b10000000
 
             cv2.putText(frame, str(i), (50,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2, cv2.LINE_AA)
+            if rect2:
+                cv2.rectangle(frame, rect2[0], rect2[1], (255, 255, 0), 2)
             if rect1:
                 cv2.rectangle(frame, rect1[0], rect1[1], (0, 255, 0), 2)
             if rect0:
                 cv2.rectangle(frame, rect0[0], rect0[1], (0, 0, 255), 2)
+            if arrow:
+                cv2.arrowedLine(frame, arrow[0], arrow[1], (0, 0, 255), 2, tipLength=0.1)
             # Show frame
             cv2.imshow('Frame', frame)
             # i = (i + 1) % len(self.frames)
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            if cv2.waitKey(wait_key_delay) & 0xFF == ord('q'):
                 break
             
             i += 1
@@ -110,5 +148,7 @@ class MotionCompensation:
         # self.cap.release()
         # cv2.destroyAllWindows()
 
-x = MotionCompensation(20, './test_clip.mp4')
+x = MotionCompensation(905, './doom.mp4')
+# x.generate_prediction_frames()
+x.playback(905, 906, autoplay=False)
 
