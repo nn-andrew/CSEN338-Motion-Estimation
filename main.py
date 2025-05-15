@@ -13,10 +13,6 @@ class MotionCompensation:
         self.fps = self.cap.get(cv2.CAP_PROP_FPS)
         self.delay = int(1000 / self.fps)
 
-        # self.frames = [self.start_frame, self.start_frame + 1]
-
-        # self.generate_prediction_frames()
-
     def generate_prediction_frames(self):
         ret0, frame0 = self.get_frame(self.start_frame)
         ret1, frame1 = self.get_frame(self.start_frame + 1)
@@ -65,8 +61,8 @@ class MotionCompensation:
                         # rect1: best candidate block
                         # rect2: search window
                         self.playback(
-                            self.start_frame, 
-                            self.start_frame, 
+                            self.start_frame + 1, 
+                            self.start_frame + 1, 
                             rect0=((i - candidate_block_width//2, j - candidate_block_height//2), (i + candidate_block_width//2, j + candidate_block_height//2)), 
                             rect1=((min_pos[0] - candidate_block_width//2, min_pos[1] - candidate_block_height//2), (min_pos[0] + candidate_block_width//2, min_pos[1] + candidate_block_height//2)),
                             rect2=((m - search_window_width//2, n - search_window_height//2), (m + search_window_width//2, n + search_window_height//2)),
@@ -75,19 +71,6 @@ class MotionCompensation:
                 print('best is', min_pos, 'with ssd =', min_ssd)
 
                 motion_vectors[m, n] = [min_pos[0], min_pos[1]]
-
-
-
-
-
-        
-        # new_frame = frame0.copy()
-        # new_frame[pelx, pely] = [0, 0, 255]
-        # print(pelx,pely)
-        # cv2.imshow('Frame', new_frame)
-
-        # if cv2.waitKey(1) & 0xFF == ord('q'):
-        #     break
 
         print('done')
 
@@ -107,20 +90,12 @@ class MotionCompensation:
                  rect2: tuple[tuple[int, int], tuple[int, int]]=None,
                  arrow: tuple[tuple[int, int], tuple[int, int]]=None
                  ):
-        # print(rect0)
 
         wait_key_delay = 1
         if not autoplay:
             wait_key_delay = 0
 
         i = start_frame_index
-
-        # Set starting frame
-        # self.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame_index)
-        # ret, frame = self.cap.read()
-        # if ret:
-        #     cv2.imshow('Frame', frame)
-        # i += 1
 
         while i <= end_frame_index:
 
@@ -131,9 +106,6 @@ class MotionCompensation:
             # If frame is unreadable, break
             if not ret:
                 break
-
-            # b,g,r = frame[0, 0]
-            # quantized_frame = frame & 0b10000000
 
             cv2.putText(frame, str(i), (50,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255,255,255), 2, cv2.LINE_AA)
             if rect2:
@@ -146,15 +118,15 @@ class MotionCompensation:
                 cv2.arrowedLine(frame, arrow[0], arrow[1], (0, 0, 255), 2, tipLength=0.1)
             # Show frame
             cv2.imshow('Frame', frame)
-            # i = (i + 1) % len(self.frames)
 
             if cv2.waitKey(wait_key_delay) & 0xFF == ord('q'):
                 break
             
             i += 1
 
-        # self.cap.release()
-        # cv2.destroyAllWindows()
+    def __del__(self):
+        self.cap.release()
+        cv2.destroyAllWindows()
 
 x = MotionCompensation(905, './doom.mp4')
 x.generate_prediction_frames()
