@@ -39,34 +39,42 @@ class MotionCompensation:
 
         motion_vectors = np.zeros((frame_height - search_window_height + 1, frame_width - search_window_width + 1, 2))
 
-        for m in range(0, frame_width - search_window_width + 1, 4):
-            for n in range(0, frame_height - search_window_height + 1, 4):
+        # m represents center of anchor block
+        for m in range(anchor_block_width//2, frame_width - anchor_block_width//2 + 1, 4):
+            for n in range(anchor_block_height//2, frame_height - anchor_block_height//2 + 1, 4):
                 min_ssd = float('inf')
-                min_pos = [0, 0]
+                min_pos = [m, n]
                 # search_window = frame1[m:m+search_window_width, n:n+search_window_height]
-                anchor_block = frame0[m:m+anchor_block_width, n:n+anchor_block_height] # TODO: center of search window?
-                for i in range(0, search_window_width - candidate_block_width + 1, 4):
-                    for j in range(0, search_window_height - candidate_block_height + 1, 4):
-                        candidate_block = frame1[m+i:m+i+candidate_block_width, n+j:n+j+candidate_block_height]
+                anchor_block = frame1[m-anchor_block_width//2 : m+anchor_block_width//2, n-anchor_block_height//2:n+anchor_block_height//2] # TODO: center of search window?
+                
+                # i, j represents center of candidate block, scans the search window (absolute coordinates)
+                for i in range(m - search_window_width//2, m + search_window_width//2 + 1, 16):
+                    for j in range(n - search_window_height//2, n + search_window_height//2 + 1, 16):
+                        if i - candidate_block_width//2 < 0 or i + candidate_block_width//2 >= frame_width or j - candidate_block_height//2 < 0 or j + candidate_block_height//2 >= frame_height:
+                            continue
+                        candidate_block = frame0[i-candidate_block_width//2:i+candidate_block_width//2, j-candidate_block_height//2:j+candidate_block_height//2]
                         # ssd of block and current candidate
                         curr_ssd = ((candidate_block - anchor_block) ** 2).sum()
                         # print(curr_ssd)
 
                         if curr_ssd < min_ssd:
                             min_ssd = curr_ssd
-                            min_pos = [m + i, n + j]
+                            min_pos = [i, j]
 
+                        # rect0: curr candidate block
+                        # rect1: best candidate block
+                        # rect2: search window
                         self.playback(
                             self.start_frame, 
                             self.start_frame, 
-                            rect0=((m + i, n + j), (m + i + candidate_block_width, n + j + candidate_block_height)), 
-                            rect1=((min_pos[0], min_pos[1]), (min_pos[0] + candidate_block_width, min_pos[1] + candidate_block_height)),
-                            rect2=((m, n), (m + search_window_width, n + search_window_height)),
+                            rect0=((i - candidate_block_width//2, j - candidate_block_height//2), (i + candidate_block_width//2, j + candidate_block_height//2)), 
+                            rect1=((min_pos[0] - candidate_block_width//2, min_pos[1] - candidate_block_height//2), (min_pos[0] + candidate_block_width//2, min_pos[1] + candidate_block_height//2)),
+                            rect2=((m - search_window_width//2, n - search_window_height//2), (m + search_window_width//2, n + search_window_height//2)),
                             arrow=((m, n), (min_pos[0], min_pos[1]))
                         )
                 print('best is', min_pos, 'with ssd =', min_ssd)
 
-                motion_vectors[m, n] = [min_pos[0] - m, min_pos[1] - n]
+                motion_vectors[m, n] = [min_pos[0], min_pos[1]]
 
 
 
@@ -149,6 +157,6 @@ class MotionCompensation:
         # cv2.destroyAllWindows()
 
 x = MotionCompensation(905, './doom.mp4')
-# x.generate_prediction_frames()
+x.generate_prediction_frames()
 x.playback(905, 906, autoplay=False)
 
