@@ -22,14 +22,12 @@ class MotionCompensation:
         frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        search_window_width = 32
-        search_window_height = 32
+        search_window_width = 64
+        search_window_height = 64
         anchor_block_width = 16
         anchor_block_height = 16
         candidate_block_width = anchor_block_width
         candidate_block_height = anchor_block_height
-
-        jump = 4
 
         print(frame_width)
         print('start')
@@ -57,9 +55,10 @@ class MotionCompensation:
 
                 checked = set()
                 
+                jump = 16
                 while True:
                     # Search candidate blocks above, below, left, right of anchor block position
-                    candidate_offsets = [[0, 0], [jump, 0], [-jump, 0], [0, -jump], [0, jump]]
+                    candidate_offsets = [[0, 0], [0, jump], [jump, 0], [-jump, 0], [0, -jump]]
 
                     pre_offset_pos = [curr_x, curr_y]
 
@@ -96,12 +95,19 @@ class MotionCompensation:
                         self.playback(
                             self.start_frame + 1, 
                             self.start_frame + 1, 
+                            # autoplay=False,
                             rect0=((offset_x - candidate_block_width//2, offset_y - candidate_block_height//2), (offset_x + candidate_block_width//2, offset_y + candidate_block_height//2)), 
                             rect1=((best_pos[0] - candidate_block_width//2, best_pos[1] - candidate_block_height//2), (best_pos[0] + candidate_block_width//2, best_pos[1] + candidate_block_height//2)),
                             rect2=((m - search_window_width//2, n - search_window_height//2), (m + search_window_width//2, n + search_window_height//2)),
-                            arrow=((m, n), (best_pos[0], best_pos[1])),
+                            arrow=((best_pos[0], best_pos[1]), (m, n)),
                             show_motion_vectors=True
                         )
+                    
+                    if jump == 1:
+                        break
+                    
+                    jump //= 2
+                    print(jump)
 
                     # If, after checking all the offset candidate blocks, the best block hasn't changed, then end search
                     if best_pos == pre_offset_pos:
@@ -110,37 +116,6 @@ class MotionCompensation:
                     curr_x, curr_y = best_pos
 
                 self.motion_vectors[(m, n)] = (best_pos[0] - m, best_pos[1] - n)
-
-
-                # # i, j represents center of candidate block, scans the search window (absolute coordinates)
-                # for i in range(m - search_window_width//2, m + search_window_width//2 + 1, 16):
-                #     for j in range(n - search_window_height//2, n + search_window_height//2 + 1, 16):
-                #         if i - candidate_block_width//2 < 0 or i + candidate_block_width//2 >= frame_width or j - candidate_block_height//2 < 0 or j + candidate_block_height//2 >= frame_height:
-                #             continue
-                #         candidate_block = frame0[i-candidate_block_width//2:i+candidate_block_width//2, j-candidate_block_height//2:j+candidate_block_height//2]
-                #         # ssd of block and current candidate
-                #         curr_ssd = ((candidate_block - anchor_block) ** 2).sum()
-                #         # print(curr_ssd)
-
-                #         if curr_ssd < best_ssd:
-                #             best_ssd = curr_ssd
-                #             best_pos = [i, j]
-
-                        # # rect0: curr candidate block
-                        # # rect1: best candidate block
-                        # # rect2: search window
-                        # self.playback(
-                        #     self.start_frame + 1, 
-                        #     self.start_frame + 1, 
-                        #     rect0=((i - candidate_block_width//2, j - candidate_block_height//2), (i + candidate_block_width//2, j + candidate_block_height//2)), 
-                        #     rect1=((best_pos[0] - candidate_block_width//2, best_pos[1] - candidate_block_height//2), (best_pos[0] + candidate_block_width//2, best_pos[1] + candidate_block_height//2)),
-                        #     rect2=((m - search_window_width//2, n - search_window_height//2), (m + search_window_width//2, n + search_window_height//2)),
-                        #     arrow=((m, n), (best_pos[0], best_pos[1])),
-                        #     show_motion_vectors=True
-                        # )
-                # print('best is', best_pos, 'with ssd =', best_ssd)
-
-                # self.motion_vectors[(m, n)] = (best_pos[0] - m, best_pos[1] - n)
 
         print('done')
 
@@ -186,7 +161,7 @@ class MotionCompensation:
                         x, y = key
                         x2, y2 = val
 
-                        cv2.arrowedLine(frame, (x, y), (x + x2, y + y2), (0, 255, 0), 2, tipLength=0.1)
+                        cv2.arrowedLine(frame, (x + x2, y + y2), (x, y), (0, 255, 0), 2, tipLength=0.1)
 
                     # Disabled to prevent downsampling
                     # c += 1
@@ -214,7 +189,7 @@ class MotionCompensation:
         self.cap.release()
         cv2.destroyAllWindows()
 
-x = MotionCompensation(905, './doom.mp4')
+i = 1700
+x = MotionCompensation(i, './motogp.mp4')
 x.generate_prediction_frames()
-# x.playback(905, 906, autoplay=False)
-
+# x.playback(i, i+1, autoplay=False)
