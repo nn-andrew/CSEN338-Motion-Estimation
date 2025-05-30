@@ -1,5 +1,10 @@
 import cv2
 import numpy as np
+from numba import njit
+
+@njit
+def compute_ssd(block1, block2):
+    return ((block1 - block2) ** 2).mean()
 
 class MotionCompensation:
 
@@ -17,7 +22,7 @@ class MotionCompensation:
 
     def generate_prediction_frames(self):
         ret0, frame0 = self.get_frame(self.start_frame)
-        ret1, frame1 = self.get_frame(self.start_frame + 1)
+        ret1, frame1 = self.get_frame(self.start_frame + 3)
 
         frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -39,6 +44,7 @@ class MotionCompensation:
         self.motion_vectors = {}
 
 
+        # generate motion vectors
         # m represents center of anchor block
         for m in range(anchor_block_height//2, frame_height - anchor_block_height//2 + 1, anchor_block_height):
             for n in range(anchor_block_width//2, frame_width - anchor_block_width//2 + 1, anchor_block_width):
@@ -55,7 +61,7 @@ class MotionCompensation:
 
                 checked = set()
                 
-                jump = 16
+                jump = 8
                 while True:
                     # Search candidate blocks above, below, left, right of anchor block position
                     candidate_offsets = [[0, 0], [0, jump], [jump, 0], [0, -jump], [-jump, 0]]
@@ -82,7 +88,7 @@ class MotionCompensation:
                                                 offset_x - candidate_block_width//2 : offset_x + candidate_block_width//2]
                     
                         # compare ssd of current candidate block with best_ssd
-                        offset_ssd = ((candidate_block - anchor_block) ** 2).sum()
+                        offset_ssd = compute_ssd(candidate_block, anchor_block)
                         if offset_ssd < best_ssd:
                             best_ssd = offset_ssd
                             best_pos = [offset_y, offset_x]
@@ -113,6 +119,22 @@ class MotionCompensation:
                     curr_y, curr_x = best_pos
 
                 self.motion_vectors[(m, n)] = (best_pos[0] - m, best_pos[1] - n)
+
+        # generate predicted frame
+        prediction_frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+        for m in range(anchor_block_height//2, frame_height - anchor_block_height//2 + 1, anchor_block_height):
+            for n in range(anchor_block_width//2, frame_width - anchor_block_width//2 + 1, anchor_block_width):
+                mv_y, mv_x = self.motion_vectors[(m,n)]
+                best_block = frame0[m + mv_y - candidate_block_height//2 : m + mv_y + candidate_block_height//2, 
+                                        n + mv_x - candidate_block_width//2 : n + mv_x + candidate_block_width//2]
+                prediction_frame[
+                    m-anchor_block_height//2 : m+anchor_block_height//2, 
+                    n-anchor_block_width//2:n+anchor_block_width//2
+                ] = best_block
+
+        cv2.imshow('Blank Frame', prediction_frame)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
         print('done')
 
@@ -186,7 +208,7 @@ class MotionCompensation:
         self.cap.release()
         cv2.destroyAllWindows()
 
-i = 2265
-x = MotionCompensation(i, './motogp.mp4')
+i = 60
+x = MotionCompensation(i, './wii.mp4')
 x.generate_prediction_frames()
 x.playback(i, i+1, autoplay=False)
