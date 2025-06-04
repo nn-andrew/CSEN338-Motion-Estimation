@@ -26,6 +26,8 @@ class MotionCompensation:
 
         frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        cx, cy = frame_width // 2, frame_height // 2  # image center
+        f = 220  # example focal length, adjust as needed
 
         search_window_width = 64
         search_window_height = 64
@@ -39,107 +41,144 @@ class MotionCompensation:
 
         best_ssd = None
         best_pos = None
-
-        # self.motion_vectors = np.full((frame_height - search_window_height + 1, frame_width - search_window_width + 1, 2), np.nan)
         self.motion_vectors = {}
 
+        def equisolid_to_perspective_radius(r_e, f):
+            return f * np.tan(2 * np.arcsin(r_e / (2 * f)))
 
-        # generate motion vectors
-        # m represents center of anchor block
+        def perspective_to_equisolid_radius(r_p, f):
+            return 2 * f * np.sin(0.5 * np.arctan(r_p / f))
+
+        def project_block_coords_grid(ax, ay, B, cx, cy, f):
+            x = np.arange(ax - B//2, ax + B//2)
+            y = np.arange(ay - B//2, ay + B//2)
+            u, v = np.meshgrid(x - cx, y - cy)
+
+            re = np.sqrt(u**2 + v**2)
+            theta = 2 * np.arcsin(np.clip(re / (2 * f), 0, 1))
+            rp = f * np.tan(theta)
+            phi = np.arctan2(v, u + 1e-9)
+
+            xp = rp * np.cos(phi)
+            yp = rp * np.sin(phi)
+
+            return xp + cx, yp + cy  # Return absolute image coordinates
+
+        def reproject_grid_to_equisolid(xp, yp, cx, cy, f):
+            rp = np.sqrt((xp - cx)**2 + (yp - cy)**2)
+            theta = np.arctan(rp / f)
+            re = 2 * f * np.sin(theta / 2)
+
+            phi = np.arctan2(yp - cy, xp - cx + 1e-9)
+            xe = re * np.cos(phi) + cx
+            ye = re * np.sin(phi) + cy
+            return xe, ye
+        
+        def compute_ssd_warped(candidate_frame, anchor_block, x_coords, y_coords, prediction_frame=None):
+            h, w = candidate_frame.shape[:2]
+            x_coords = np.clip(x_coords, 0, w - 1).astype(np.float32)
+            y_coords = np.clip(y_coords, 0, h - 1).astype(np.float32)
+
+            sampled = cv2.remap(candidate_frame, x_coords, y_coords, interpolation=cv2.INTER_LINEAR)
+            mask = ~np.isnan(sampled)
+            diff = (sampled - anchor_block)[mask]
+            
+            # Optional visualization
+            if prediction_frame is not None:
+                # Round warped coordinates to nearest pixels
+                x_int = np.round(x_coords).astype(int)
+                y_int = np.round(y_coords).astype(int)
+
+                for yi, xi in zip(y_int.ravel(), x_int.ravel()):
+                    if 0 <= yi < prediction_frame.shape[0] and 0 <= xi < prediction_frame.shape[1]:
+                        prediction_frame[yi, xi] = [0, 0, 255]  # Red in BGR
+
+                cv2.imshow('Warped Anchor Block', prediction_frame)
+                cv2.waitKey(1)
+
+            return np.sum(diff ** 2)
+
+
+
+        c = 0
         for m in range(anchor_block_height//2, frame_height - anchor_block_height//2 + 1, anchor_block_height):
             for n in range(anchor_block_width//2, frame_width - anchor_block_width//2 + 1, anchor_block_width):
-                # search_window = frame1[m:m+search_window_width, n:n+search_window_height]
-                anchor_block = frame1[m-anchor_block_height//2 : m+anchor_block_height//2, n-anchor_block_width//2:n+anchor_block_width//2]
+                anchor_block = frame1[m-8:m+8, n-8:n+8]  # 16x16 block
+                xp_grid, yp_grid = project_block_coords_grid(n, m, 16, cx, cy, f)
+                curr_xp, curr_yp = 0, 0
+                best_ssd = float('inf')
+                best_pos = (0, 0)
 
-                curr_y, curr_x = m, n
-
-                candidate_block = frame0[curr_y - candidate_block_height//2 : curr_y + candidate_block_height//2, 
-                                        curr_x - candidate_block_width//2 : curr_x + candidate_block_width//2]
-                
-                best_ssd = ((candidate_block - anchor_block) ** 2).sum()
-                best_pos = [m, n]
-
-                checked = set()
-                
                 jump = 8
                 while True:
-                    # Search candidate blocks above, below, left, right of anchor block position
                     candidate_offsets = [[0, 0], [0, jump], [jump, 0], [0, -jump], [-jump, 0]]
+                    pre_offset = (curr_xp, curr_yp)
 
-                    pre_offset_pos = [curr_y, curr_x]
+                    for dxp, dyp in candidate_offsets:
+                        x_shifted = xp_grid + dxp
+                        y_shifted = yp_grid + dyp
 
-                    for offset in candidate_offsets:
-                        offset_y, offset_x = (curr_y + offset[0], curr_x + offset[1]) 
-                        if (offset_y, offset_x) in checked:
-                            continue
-
-                        # Check if current candidate block is within bounds
-                        if offset_x - candidate_block_width//2 < n - search_window_width//2 or offset_x + candidate_block_width//2 >= n + search_window_width//2:
-                            continue
-                        if offset_y - candidate_block_height//2 < m - search_window_height//2 or offset_y + candidate_block_height//2 >= m + search_window_height//2:
-                            continue
-                        if offset_x - candidate_block_width//2 < 0 or offset_x + candidate_block_width//2 >= frame_width:
-                            continue
-                        if offset_y - candidate_block_height//2 < 0 or offset_y + candidate_block_height//2 >= frame_height:
-                            continue
-
-                        # get ssd
-                        candidate_block = frame0[offset_y - candidate_block_height//2 : offset_y + candidate_block_height//2, 
-                                                offset_x - candidate_block_width//2 : offset_x + candidate_block_width//2]
-                    
-                        # compare ssd of current candidate block with best_ssd
-                        offset_ssd = compute_ssd(candidate_block, anchor_block)
-                        if offset_ssd < best_ssd:
-                            best_ssd = offset_ssd
-                            best_pos = [offset_y, offset_x]
-
-                        checked.add((offset_y, offset_x))
-
-                        # rect0: curr candidate block
-                        # rect1: best candidate block
-                        # rect2: search window
-                        self.playback(
-                            self.start_frame + 1, 
-                            self.start_frame + 1, 
-                            # autoplay=False,
-                            rect0=((offset_x - candidate_block_width//2, offset_y - candidate_block_height//2), (offset_x + candidate_block_width//2, offset_y + candidate_block_height//2)), 
-                            rect1=((best_pos[1] - candidate_block_width//2, best_pos[0] - candidate_block_height//2), (best_pos[1] + candidate_block_width//2, best_pos[0] + candidate_block_height//2)),
-                            rect2=((n - search_window_width//2, m - search_window_height//2), (n + search_window_width//2, m + search_window_height//2)),
-                            arrow=((best_pos[1], best_pos[0]), (n, m)),
-                            show_motion_vectors=True
+                        ssd = compute_ssd_warped(
+                            frame0, anchor_block, x_shifted, y_shifted, 
+                            # prediction_frame=frame1.copy()
                         )
-                    
+                        if ssd < best_ssd:
+                            best_ssd = ssd
+                            best_pos = (dxp, dyp)
+
                     if jump == 1:
                         break
+                    if np.isclose(curr_xp, pre_offset[0]) and np.isclose(curr_yp, pre_offset[1]):
+                        jump //= 2
 
-                    # If, after checking all the offset candidate blocks, the best block hasn't changed, then end search
-                    if best_pos == pre_offset_pos:
-                        jump //=2
+                    curr_xp, curr_yp = best_pos
 
-                    curr_y, curr_x = best_pos
+                self.motion_vectors[(m, n)] = best_pos
 
-                self.motion_vectors[(m, n)] = (best_pos[0] - m, best_pos[1] - n)
-
-        # generate predicted frame
         prediction_frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
         for m in range(anchor_block_height//2, frame_height - anchor_block_height//2 + 1, anchor_block_height):
             for n in range(anchor_block_width//2, frame_width - anchor_block_width//2 + 1, anchor_block_width):
-                mv_y, mv_x = self.motion_vectors[(m,n)]
-                best_block = frame0[m + mv_y - candidate_block_height//2 : m + mv_y + candidate_block_height//2, 
-                                        n + mv_x - candidate_block_width//2 : n + mv_x + candidate_block_width//2]
-                prediction_frame[
-                    m-anchor_block_height//2 : m+anchor_block_height//2, 
-                    n-anchor_block_width//2:n+anchor_block_width//2
-                ] = best_block
+                dy, dx = self.motion_vectors[(m, n)]
+
+                # Step 1: Warp entire anchor block to perspective domain
+                xp_grid, yp_grid = project_block_coords_grid(n, m, anchor_block_width, cx, cy, f)
+
+                # Step 2: Add motion vector in perspective domain
+                xp_grid_shifted = xp_grid + dx
+                yp_grid_shifted = yp_grid + dy
+
+                xe, ye = reproject_grid_to_equisolid(xp_grid_shifted, yp_grid_shifted, cx, cy, f)
+
+                warped_block = cv2.remap(
+                    frame0, xe.astype(np.float32), ye.astype(np.float32),
+                    interpolation=cv2.INTER_LINEAR,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=0
+                )
+
+                # # Step 3: Sample from the reference frame using bilinear interpolation
+                # x_sample = xp_grid_shifted.astype(np.float32)
+                # y_sample = yp_grid_shifted.astype(np.float32)
+
+                # warped_block = cv2.remap(
+                #     frame0, x_sample, y_sample,
+                #     interpolation=cv2.INTER_LINEAR,
+                #     borderMode=cv2.BORDER_CONSTANT,
+                #     borderValue=0
+                # )
+
+                # Step 4: Copy the block into the prediction frame
+                prediction_frame[m - anchor_block_height//2 : m + anchor_block_height//2,
+                                n - anchor_block_width//2 : n + anchor_block_width//2] = warped_block
 
         cv2.imshow('Blank Frame', prediction_frame)
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
         print('done')
-
         self.cap.release()
         cv2.destroyAllWindows()
+
 
     def get_frame(self, frame_index):
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
@@ -209,6 +248,6 @@ class MotionCompensation:
         cv2.destroyAllWindows()
 
 i = 60
-x = MotionCompensation(i, './wii.mp4')
+x = MotionCompensation(i, './skate.mp4')
 x.generate_prediction_frames()
 x.playback(i, i+1, autoplay=False)
